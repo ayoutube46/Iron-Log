@@ -1,0 +1,385 @@
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --bg: #14161a;
+  --surface: #1c1f24;
+  --surface-raised: #23262c;
+  --text: #ece9e3;
+  --text-muted: #8a8f98;
+  --border: rgba(236, 233, 227, 0.08);
+  --red: #c6482e;
+  --blue: #3b7dd8;
+  --yellow: #e3b23c;
+  --green: #4c9a5b;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.mono { font-family: 'IBM Plex Mono', monospace; }
+
+header {
+  padding: 24px 20px 0;
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.brand h1 {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 34px;
+  letter-spacing: 0.5px;
+  margin: 0;
+  line-height: 1;
+}
+
+.brand .today {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+nav.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+nav.tabs button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 18px;
+  letter-spacing: 0.5px;
+  padding: 10px 16px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+nav.tabs button.active {
+  color: var(--text);
+  border-bottom-color: var(--red);
+}
+
+nav.tabs button:hover { color: var(--text); }
+
+main {
+  flex: 1;
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.view { display: none; }
+.view.active { display: block; }
+
+/* Exercise plate picker */
+.plate-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.plate {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: transform 0.1s, border-color 0.15s;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+}
+
+.plate:hover { transform: translateY(-2px); }
+.plate.selected { border-color: var(--plate-color, var(--red)); }
+
+.plate-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--plate-color, var(--red));
+  border: 3px solid rgba(255,255,255,0.15);
+}
+
+.plate.add-plate {
+  border-style: dashed;
+  color: var(--text-muted);
+  justify-content: center;
+}
+
+.plate.add-plate .plate-dot {
+  background: none;
+  border: 2px dashed var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* Set entry panel */
+.set-entry {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--plate-color, var(--red));
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.set-entry h3 {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 22px;
+  margin: 0 0 12px;
+  letter-spacing: 0.5px;
+}
+
+.set-entry-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.set-entry-row input[type="number"] {
+  width: 80px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 15px;
+}
+
+button.primary, button.secondary {
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  border-radius: 6px;
+  padding: 9px 14px;
+  cursor: pointer;
+  border: none;
+}
+
+button.primary {
+  background: var(--plate-color, var(--red));
+  color: #fff;
+}
+
+button.secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.set-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.set-chip {
+  background: var(--surface-raised);
+  border-radius: 20px;
+  padding: 5px 12px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+}
+
+/* Today's summary */
+.session-summary { margin-top: 8px; }
+
+.summary-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.summary-row:last-child { border-bottom: none; }
+
+.summary-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--dot-color, var(--red));
+  flex-shrink: 0;
+}
+
+.summary-name { font-weight: 600; flex: 1; }
+
+.summary-sets {
+  color: var(--text-muted);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+}
+
+.empty-state {
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 20px 0;
+  text-align: center;
+}
+
+h2.section-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 24px;
+  letter-spacing: 0.5px;
+  margin: 28px 0 12px;
+}
+
+h2.section-title:first-child { margin-top: 0; }
+
+/* History heatmap */
+.heatmap {
+  display: grid;
+  grid-template-columns: repeat(14, 1fr);
+  gap: 4px;
+  margin-bottom: 24px;
+}
+
+.heatmap-cell {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  background: var(--surface);
+}
+
+/* History list */
+.history-day {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.history-day-header {
+  padding: 12px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+}
+
+.history-day-date {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 600;
+}
+
+.history-day-body {
+  padding: 0 16px 14px;
+  display: none;
+}
+
+.history-day.open .history-day-body { display: block; }
+
+/* Analytics */
+.pb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.pb-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--plate-color, var(--red));
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.pb-card .pb-name {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.pb-card .pb-value {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 28px;
+  letter-spacing: 0.5px;
+}
+
+.pb-card .pb-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.chart-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+select.exercise-select {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-family: 'Inter', sans-serif;
+  margin-bottom: 14px;
+}
+
+.setup-banner {
+  background: var(--surface);
+  border: 1px solid var(--yellow);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.setup-banner code {
+  background: var(--surface-raised);
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+@media (max-width: 480px) {
+  .plate-grid { grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); }
+  .heatmap { grid-template-columns: repeat(10, 1fr); }
+}

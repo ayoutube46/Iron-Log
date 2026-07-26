@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Iron Log — Exercise Tracker</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>IRON LOG</h1>
+      <span class="today" id="today-label"></span>
+    </div>
+    <nav class="tabs">
+      <button data-view="log" class="active">Log</button>
+      <button data-view="history">History</button>
+      <button data-view="analytics">Analytics</button>
+    </nav>
+  </header>
+
+  <main>
+    <div id="setup-banner" class="setup-banner" style="display:none">
+      <strong>One-time setup needed.</strong> This site needs a free Supabase project to store your data.
+      Open <code>config.js</code>, paste in your Project URL and anon key (Supabase dashboard →
+      Settings → API), and run <code>supabase-schema.sql</code> in the Supabase SQL Editor. See
+      <code>README.md</code> for the full walkthrough.
+    </div>
+
+    <section id="view-log" class="view active">
+      <h2 class="section-title">Today's session</h2>
+      <div class="plate-grid" id="plate-grid"></div>
+      <div id="set-entry-wrap"></div>
+      <h2 class="section-title">Logged today</h2>
+      <div class="session-summary" id="session-summary">
+        <div class="empty-state">Nothing logged yet today — pick an exercise above to get started.</div>
+      </div>
+    </section>
+
+    <section id="view-history" class="view">
+      <h2 class="section-title">Last 12 weeks</h2>
+      <div class="heatmap" id="heatmap"></div>
+      <h2 class="section-title">Sessions</h2>
+      <div id="history-list"></div>
+    </section>
+
+    <section id="view-analytics" class="view">
+      <h2 class="section-title">Personal bests</h2>
+      <div class="pb-grid" id="pb-grid"></div>
+      <h2 class="section-title">Progress over time</h2>
+      <select class="exercise-select" id="exercise-select"></select>
+      <div class="chart-wrap" id="chart-wrap"></div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
