@@ -48,6 +48,7 @@ create table if not exists workouts (
 );
 
 alter table workouts add column if not exists user_id uuid references auth.users(id) on delete cascade;
+alter table workouts add column if not exists set_durations integer[]; -- seconds per set, same index order as reps_per_set. Null entries allowed for sets logged before this feature existed.
 
 -- ---- Replace v1's "public" policies with per-user policies ----
 alter table exercises enable row level security;

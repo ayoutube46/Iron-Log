@@ -407,6 +407,29 @@ button.primary:disabled, button.secondary:disabled { opacity: 0.4; cursor: not-a
 
 .entry-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
+.stopwatch-live {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--surface-raised);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+.stopwatch-time {
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--plate-color, var(--red));
+  min-width: 80px;
+}
+
+.trend-line {
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
 /* Today's summary */
 .session-summary { margin-top: 8px; }
 

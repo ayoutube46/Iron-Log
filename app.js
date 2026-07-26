@@ -104,7 +104,11 @@ async function handleSignup(username, password) {
   const email = usernameToEmail(username);
   const { data, error } = await db.auth.signUp({ email, password });
   if (error) {
-    showAuthError(error.message.includes("Password") ? error.message : "Couldn't create that account. " + error.message);
+    if (error.message.toLowerCase().includes("rate limit")) {
+      showAuthError("Too many signups too quickly — Supabase's free email limit was hit. Wait about an hour and try again, or ask the site owner to add a free custom SMTP provider (see README).");
+    } else {
+      showAuthError(error.message.includes("Password") ? error.message : "Couldn't create that account. " + error.message);
+    }
     return;
   }
   if (!data.user) {
@@ -271,6 +275,7 @@ function renderPlateGrid() {
 function selectExercise(id) {
   state.selectedExerciseId = id;
   state.pendingSets = [];
+  timerState = null;
   renderPlateGrid();
   renderSetEntry();
 }
@@ -286,6 +291,12 @@ async function addCustomExercise() {
   selectExercise(data.id);
 }
 
+function formatDuration(totalSeconds) {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return m + ":" + String(s).padStart(2, "0");
+}
+
 function renderSetEntry() {
   const wrap = document.getElementById("set-entry-wrap");
   if (!state.selectedExerciseId) { wrap.innerHTML = ""; return; }
@@ -294,10 +305,7 @@ function renderSetEntry() {
     <div class="set-entry" style="--plate-color:${ex.color}">
       <h3>${escapeHtml(ex.name)}</h3>
       <div class="set-chips" id="set-chips"></div>
-      <div class="set-entry-row">
-        <input type="number" id="reps-input" min="0" placeholder="reps" />
-        <button class="primary" id="add-set-btn" style="--plate-color:${ex.color}">Add set</button>
-      </div>
+      <div id="stopwatch-area"></div>
       <button class="secondary" id="save-session-btn">Save to today's session</button>
     </div>
   `;
@@ -305,27 +313,74 @@ function renderSetEntry() {
     gsap.from(wrap.firstElementChild, { opacity: 0, y: 8, duration: 0.3, ease: "power2.out" });
   }
   renderSetChips();
-  document.getElementById("add-set-btn").addEventListener("click", () => {
-    const input = document.getElementById("reps-input");
-    const val = parseInt(input.value, 10);
-    if (!Number.isFinite(val) || val < 0) return;
-    state.pendingSets.push(val);
-    input.value = "";
-    renderSetChips();
-  });
-  document.getElementById("reps-input").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") document.getElementById("add-set-btn").click();
-  });
+  renderStopwatchArea(ex);
   document.getElementById("save-session-btn").addEventListener("click", saveSession);
+}
+
+// ---- Live per-set stopwatch ----
+let timerState = null; // { startedAt } while a set is in progress
+
+function renderStopwatchArea(ex) {
+  const area = document.getElementById("stopwatch-area");
+  if (!area) return;
+  if (!timerState) {
+    area.innerHTML = `
+      <div class="set-entry-row">
+        <button class="primary" id="start-set-btn" style="--plate-color:${ex.color}">
+          Start set ${state.pendingSets.length + 1}
+        </button>
+      </div>
+    `;
+    document.getElementById("start-set-btn").addEventListener("click", startSet);
+    return;
+  }
+  area.innerHTML = `
+    <div class="stopwatch-live" style="--plate-color:${ex.color}">
+      <div class="stopwatch-time mono" id="stopwatch-readout">0:00</div>
+      <button class="primary" id="finish-set-btn" style="--plate-color:${ex.color}">Finish set</button>
+    </div>
+  `;
+  document.getElementById("finish-set-btn").addEventListener("click", finishSet);
+  tickStopwatch();
+}
+
+function startSet() {
+  timerState = { startedAt: Date.now() };
+  renderStopwatchArea(state.exercises.find((e) => e.id === state.selectedExerciseId));
+}
+
+function tickStopwatch() {
+  const readout = document.getElementById("stopwatch-readout");
+  if (!readout || !timerState) return;
+  const elapsed = Math.floor((Date.now() - timerState.startedAt) / 1000);
+  readout.textContent = formatDuration(elapsed);
+  if (timerState) requestAnimationFrame(() => setTimeout(tickStopwatch, 250));
+}
+
+function finishSet() {
+  if (!timerState) return;
+  const duration = Math.max(1, Math.round((Date.now() - timerState.startedAt) / 1000));
+  timerState = null;
+  const reps = prompt("How many reps did you complete in that set?");
+  const val = parseInt(reps, 10);
+  if (!Number.isFinite(val) || val < 0) {
+    // Cancelled or invalid — discard this set's timing and let them try again.
+    renderStopwatchArea(state.exercises.find((e) => e.id === state.selectedExerciseId));
+    return;
+  }
+  state.pendingSets.push({ reps: val, duration });
+  renderSetChips();
+  renderStopwatchArea(state.exercises.find((e) => e.id === state.selectedExerciseId));
 }
 
 function renderSetChips() {
   const chips = document.getElementById("set-chips");
   if (!chips) return;
   chips.innerHTML = state.pendingSets
-    .map((r, i) => `<span class="set-chip">Set ${i + 1}: ${r}</span>`)
+    .map((s, i) => `<span class="set-chip">Set ${i + 1}: ${s.reps} reps · ${formatDuration(s.duration)}</span>`)
     .join("");
-  document.getElementById("save-session-btn").disabled = state.pendingSets.length === 0;
+  const saveBtn = document.getElementById("save-session-btn");
+  if (saveBtn) saveBtn.disabled = state.pendingSets.length === 0;
   if (!reduceMotion && window.gsap && chips.lastElementChild) {
     gsap.from(chips.lastElementChild, { scale: 0.5, opacity: 0, duration: 0.25, ease: "back.out(2)" });
   }
@@ -334,6 +389,8 @@ function renderSetChips() {
 async function saveSession() {
   if (!state.pendingSets.length) return;
   const exerciseId = state.selectedExerciseId;
+  const pendingReps = state.pendingSets.map((s) => s.reps);
+  const pendingDurations = state.pendingSets.map((s) => s.duration);
 
   // Check for a PR against everything logged before today.
   const { data: priorRows } = await db
@@ -346,31 +403,45 @@ async function saveSession() {
   (priorRows || []).forEach((r) => { prevMaxSet = Math.max(prevMaxSet, ...r.reps_per_set); });
 
   const existing = state.todaysWorkouts.find((w) => w.exercise_id === exerciseId);
-  const mergedSets = existing ? [...existing.reps_per_set, ...state.pendingSets] : [...state.pendingSets];
+  const mergedReps = existing ? [...existing.reps_per_set, ...pendingReps] : [...pendingReps];
+  const mergedDurations = existing
+    ? [...(existing.set_durations || existing.reps_per_set.map(() => null)), ...pendingDurations]
+    : [...pendingDurations];
 
   if (existing) {
-    const { error } = await db.from("workouts").update({ reps_per_set: mergedSets }).eq("id", existing.id);
+    const { error } = await db.from("workouts").update({ reps_per_set: mergedReps, set_durations: mergedDurations }).eq("id", existing.id);
     if (error) { alert("Save failed: " + error.message); return; }
   } else {
     const { error } = await db.from("workouts").insert({
       session_date: TODAY,
       exercise_id: exerciseId,
-      reps_per_set: mergedSets,
+      reps_per_set: mergedReps,
+      set_durations: mergedDurations,
       user_id: state.user.id,
     });
     if (error) { alert("Save failed: " + error.message); return; }
   }
 
-  const newMaxSet = Math.max(...mergedSets);
+  const newMaxSet = Math.max(...mergedReps);
   const isPR = newMaxSet > prevMaxSet;
 
   state.pendingSets = [];
   state.selectedExerciseId = null;
+  timerState = null;
   document.getElementById("set-entry-wrap").innerHTML = "";
   renderPlateGrid();
   await loadTodaysWorkouts();
 
   if (isPR) celebratePR(exerciseId);
+}
+
+function formatSetsWithTime(reps_per_set, set_durations) {
+  return reps_per_set
+    .map((r, i) => {
+      const d = set_durations && set_durations[i];
+      return d ? `${r} reps · ${formatDuration(d)}` : `${r} reps`;
+    })
+    .join(" / ");
 }
 
 function renderSessionSummary() {
@@ -384,7 +455,7 @@ function renderSessionSummary() {
       <div class="summary-row" style="--dot-color:${w.exercises.color}" data-exercise="${w.exercise_id}">
         <div class="summary-dot"></div>
         <div class="summary-name">${escapeHtml(w.exercises.name)}</div>
-        <div class="summary-sets">${w.reps_per_set.join(" / ")}</div>
+        <div class="summary-sets">${formatSetsWithTime(w.reps_per_set, w.set_durations)}</div>
       </div>
     `)
     .join("");
@@ -605,7 +676,7 @@ function renderHistoryList() {
             <div class="summary-row" style="--dot-color:${w.exercises.color}">
               <div class="summary-dot"></div>
               <div class="summary-name">${escapeHtml(w.exercises.name)}</div>
-              <div class="summary-sets">${w.reps_per_set.join(" / ")}</div>
+              <div class="summary-sets">${formatSetsWithTime(w.reps_per_set, w.set_durations)}</div>
             </div>
           `).join("")}
         </div>
@@ -627,6 +698,7 @@ async function renderAnalytics() {
   if (!state.historyLoaded) await loadAllWorkouts();
   renderStatStrip();
   renderPersonalBests();
+  renderTrends();
   renderWeeklyChart();
   renderExerciseSelect();
   wireChartControls();
@@ -697,6 +769,82 @@ function renderPersonalBests() {
         <div class="pb-label">best session total</div>
       </div>
     `)
+    .join("");
+  if (!reduceMotion && window.gsap) {
+    gsap.from(el.children, { opacity: 0, y: 12, duration: 0.3, stagger: 0.05, ease: "power2.out" });
+  }
+}
+
+function dateKeyDaysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+function avgSetDuration(rows) {
+  let total = 0, count = 0;
+  rows.forEach((w) => {
+    (w.set_durations || []).forEach((d) => { if (d != null) { total += d; count++; } });
+  });
+  return count ? total / count : null;
+}
+
+function renderTrends() {
+  const el = document.getElementById("trend-grid");
+  if (!el) return;
+  const thisWeekStart = dateKeyDaysAgo(6);
+  const lastWeekStart = dateKeyDaysAgo(13);
+  const lastWeekEnd = dateKeyDaysAgo(7);
+
+  const exerciseIds = [...new Set(state.allWorkouts.map((w) => w.exercise_id))];
+  const cards = exerciseIds.map((id) => {
+    const rows = state.allWorkouts.filter((w) => w.exercise_id === id);
+    const sample = rows[0];
+    const thisWeekRows = rows.filter((r) => r.session_date >= thisWeekStart);
+    const lastWeekRows = rows.filter((r) => r.session_date >= lastWeekStart && r.session_date <= lastWeekEnd);
+    const thisAvg = avgSetDuration(thisWeekRows);
+    const lastAvg = avgSetDuration(lastWeekRows);
+    return { name: sample.exercises.name, color: sample.exercises.color, thisAvg, lastAvg };
+  });
+
+  if (!cards.length) {
+    el.innerHTML = `<div class="empty-state">Log a few sets with the stopwatch to see your pace trend.</div>`;
+    return;
+  }
+
+  el.innerHTML = cards
+    .map((c) => {
+      if (c.thisAvg == null && c.lastAvg == null) {
+        return `
+          <div class="pb-card" style="--plate-color:${c.color}">
+            <div class="pb-name">${escapeHtml(c.name)}</div>
+            <div class="empty-state" style="padding:6px 0">No timed sets yet</div>
+          </div>`;
+      }
+      if (c.thisAvg == null || c.lastAvg == null) {
+        return `
+          <div class="pb-card" style="--plate-color:${c.color}">
+            <div class="pb-name">${escapeHtml(c.name)}</div>
+            <div class="pb-value">${formatDuration(Math.round(c.thisAvg ?? c.lastAvg))}</div>
+            <div class="pb-label">avg time / set</div>
+            <div class="empty-state" style="padding:4px 0;font-size:11px">Not enough data yet to compare weeks</div>
+          </div>`;
+      }
+      const delta = c.thisAvg - c.lastAvg;
+      const pct = c.lastAvg ? Math.round((delta / c.lastAvg) * 100) : 0;
+      const faster = delta < 0;
+      const arrow = faster ? "&#8595;" : delta > 0 ? "&#8593;" : "&#8594;";
+      const trendColor = faster ? "var(--green)" : delta > 0 ? "var(--red)" : "var(--text-muted)";
+      return `
+        <div class="pb-card" style="--plate-color:${c.color}">
+          <div class="pb-name">${escapeHtml(c.name)}</div>
+          <div class="pb-value">${formatDuration(Math.round(c.thisAvg))}</div>
+          <div class="pb-label">avg time / set this week</div>
+          <div class="trend-line" style="color:${trendColor}">
+            ${arrow} ${Math.abs(pct)}% vs last week (${formatDuration(Math.round(c.lastAvg))})
+          </div>
+        </div>`;
+    })
     .join("");
   if (!reduceMotion && window.gsap) {
     gsap.from(el.children, { opacity: 0, y: 12, duration: 0.3, stagger: 0.05, ease: "power2.out" });

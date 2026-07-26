@@ -24,6 +24,12 @@ Pages with a free Supabase database for storage and login.
 6. Turn off email confirmation so accounts work instantly with just a username and
    password (no real email is ever sent or needed): go to **Authentication → Providers**,
    click **Email**, and toggle **Confirm email** off. Save.
+7. **If signup ever fails with "email rate limit exceeded":** Supabase's default email
+   sender has a very low free-tier limit that can trip even without confirmation emails
+   turned on, especially after a few repeated test signups. Either wait about an hour
+   for it to reset, or (recommended if more than one or two people will be signing up)
+   connect a free custom SMTP provider like [resend.com](https://resend.com) under
+   **Authentication → Providers → Email → SMTP Settings** to remove the limit for good.
 
 ## 2. Connect the site to your database
 
@@ -116,9 +122,11 @@ Then add `SUPABASE_URL` and `SUPABASE_ANON_KEY` as repo secrets under
   one's already taken. Everyone only ever sees and edits their own exercises and
   workouts; Supabase's row-level security enforces this at the database level, not just
   in the app's UI.
-- **Log tab** — pick an exercise (or add a new one), enter reps for each set, and save.
-  Saving multiple times for the same exercise on the same day appends more sets to that
-  day's entry rather than creating duplicates. Beating a previous best triggers a small
+- **Log tab** — pick an exercise (or add a new one), then tap **Start set** to begin a
+  live stopwatch. When you finish the set, tap **Finish set** and enter how many reps
+  you completed — both the reps and the time get saved together. Saving multiple times
+  for the same exercise on the same day appends more sets to that day's entry rather
+  than creating duplicates. Beating a previous best rep count triggers a small
   celebration animation and a "PR!" badge.
 - **Manage exercises** (gear icon on the Log tab) — rename an exercise, cycle its plate
   color, **archive** it (hides it from the picker but keeps all its history), or
@@ -128,9 +136,15 @@ Then add `SUPABASE_URL` and `SUPABASE_ANON_KEY` as repo secrets under
   an expandable list of past sessions.
 - **Analytics tab** — headline stats (total sessions, sets, reps, and current day
   streak), personal-best cards (best single set, best session total) per exercise, a
-  stacked weekly-volume chart comparing all exercises, and a progress chart you can
-  switch between total reps / best set / number of sets, over the last 30 days, 90 days,
-  or all time.
+  **pace trend** section comparing this week's average time per set against last
+  week's for each exercise (so you can see whether you're getting faster), a stacked
+  weekly-volume chart comparing all exercises, and a progress chart you can switch
+  between total reps / best set / number of sets, over the last 30 days, 90 days, or
+  all time.
+
+**Note:** since this update added the `set_durations` column, re-run
+`supabase-schema.sql` once in the Supabase SQL editor if you set this project up
+before — it's written to upgrade your existing tables safely.
 
 ## Extending it later
 
