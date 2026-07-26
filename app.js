@@ -1,4 +1,6 @@
-// ---- Setup ----
+// ============================================================
+// Setup
+// ============================================================
 const { createClient } = supabase;
 let db = null;
 const configured =
@@ -10,43 +12,212 @@ if (configured) {
   db = createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey);
 }
 
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const EMAIL_DOMAIN = "users.ironlog.local";
+const PLATE_COLORS = ["#e2492e", "#3f86e0", "#eab838", "#4fae63"];
+
 const todayStr = () => {
   const d = new Date();
   return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 };
 const TODAY = todayStr();
 
-const PLATE_COLORS = ["#c6482e", "#3b7dd8", "#e3b23c", "#4c9a5b"];
-
 let state = {
-  exercises: [],
-  todaysWorkouts: [], // rows from workouts table for today
+  user: null,
+  username: null,
+  exercises: [],       // active (non-archived) exercises for the picker
+  allExercisesRaw: [],  // every exercise incl. archived, for the manage modal
+  todaysWorkouts: [],
   selectedExerciseId: null,
-  pendingSets: [], // sets being built for the currently selected exercise before they're saved
-  allWorkouts: [], // full history, loaded lazily
+  pendingSets: [],
+  allWorkouts: [],
+  historyLoaded: false,
+  chartMetric: "total",
+  chartRange: "30",
 };
 
-// ---- Tab navigation ----
-document.querySelectorAll("nav.tabs button").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll("nav.tabs button").forEach((b) => b.classList.remove("active"));
-    document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
-    btn.classList.add("active");
-    document.getElementById("view-" + btn.dataset.view).classList.add("active");
-    if (btn.dataset.view === "history") renderHistory();
-    if (btn.dataset.view === "analytics") renderAnalytics();
-  });
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function usernameToEmail(username) {
+  const clean = username.trim().toLowerCase().replace(/[^a-z0-9_.-]/g, "");
+  return clean + "@" + EMAIL_DOMAIN;
+}
+
+// ============================================================
+// Auth screen wiring
+// ============================================================
+let authMode = "login";
+const authTitle = document.getElementById("auth-submit");
+const authHint = document.getElementById("auth-hint");
+const authError = document.getElementById("auth-error");
+
+document.getElementById("tab-login").addEventListener("click", () => setAuthMode("login"));
+document.getElementById("tab-signup").addEventListener("click", () => setAuthMode("signup"));
+
+function setAuthMode(mode) {
+  authMode = mode;
+  document.getElementById("tab-login").classList.toggle("active", mode === "login");
+  document.getElementById("tab-signup").classList.toggle("active", mode === "signup");
+  authTitle.textContent = mode === "login" ? "Log in" : "Create account";
+  authHint.textContent = mode === "login"
+    ? "No account yet? Switch to Sign up above."
+    : "Already have an account? Switch to Log in above.";
+  hideAuthError();
+}
+
+function showAuthError(msg) {
+  authError.textContent = msg;
+  authError.classList.add("visible");
+}
+function hideAuthError() {
+  authError.classList.remove("visible");
+}
+
+document.getElementById("auth-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  hideAuthError();
+  const username = document.getElementById("auth-username").value.trim();
+  const password = document.getElementById("auth-password").value;
+  if (!username || !password) return;
+  authTitle.disabled = true;
+  try {
+    if (authMode === "signup") {
+      await handleSignup(username, password);
+    } else {
+      await handleLogin(username, password);
+    }
+  } finally {
+    authTitle.disabled = false;
+  }
 });
+
+async function handleSignup(username, password) {
+  const { data: existing } = await db.from("profiles").select("id").eq("username", username).maybeSingle();
+  if (existing) {
+    showAuthError("That username is already taken — try another, or log in instead.");
+    return;
+  }
+  const email = usernameToEmail(username);
+  const { data, error } = await db.auth.signUp({ email, password });
+  if (error) {
+    showAuthError(error.message.includes("Password") ? error.message : "Couldn't create that account. " + error.message);
+    return;
+  }
+  if (!data.user) {
+    showAuthError("Something went wrong creating your account. Please try again.");
+    return;
+  }
+  const { error: profileError } = await db.from("profiles").insert({ id: data.user.id, username });
+  if (profileError) {
+    showAuthError("That username was just taken by someone else — please log in or try a different username.");
+    return;
+  }
+  // onAuthStateChange picks up the new session and shows the app.
+}
+
+async function handleLogin(username, password) {
+  const email = usernameToEmail(username);
+  const { error } = await db.auth.signInWithPassword({ email, password });
+  if (error) {
+    showAuthError("Incorrect username or password.");
+  }
+}
+
+document.getElementById("logout-btn").addEventListener("click", async () => {
+  await db.auth.signOut();
+});
+
+// ============================================================
+// Auth state -> show app or auth screen
+// ============================================================
+async function onSignedIn(user) {
+  state.user = user;
+  const { data: profile } = await db.from("profiles").select("username").eq("id", user.id).maybeSingle();
+  state.username = profile ? profile.username : user.email.split("@")[0];
+  document.getElementById("username-pill").textContent = "@" + state.username;
+  document.getElementById("auth-screen").style.display = "none";
+  document.getElementById("app").hidden = false;
+  await loadExercises();
+  await loadTodaysWorkouts();
+  positionTabUnderline();
+}
+
+function onSignedOut() {
+  state = { ...state, user: null, username: null, exercises: [], allWorkouts: [], todaysWorkouts: [] };
+  document.getElementById("app").hidden = true;
+  document.getElementById("auth-screen").style.display = "flex";
+}
+
+if (configured) {
+  db.auth.onAuthStateChange((_event, session) => {
+    if (session && session.user) onSignedIn(session.user);
+    else onSignedOut();
+  });
+  db.auth.getSession().then(({ data }) => {
+    if (!data.session) onSignedOut();
+  });
+} else {
+  document.getElementById("auth-screen").innerHTML = `
+    <div class="auth-card">
+      <h1>IRON LOG</h1>
+      <div class="setup-banner" style="margin-top:12px">
+        <strong>One-time setup needed.</strong> Paste your Supabase URL and anon key into
+        <code>config.js</code>, then run <code>supabase-schema.sql</code> in the Supabase SQL
+        editor. See <code>README.md</code> for the full walkthrough.
+      </div>
+    </div>`;
+}
 
 document.getElementById("today-label").textContent = new Date().toLocaleDateString(undefined, {
   weekday: "long", month: "long", day: "numeric",
 });
 
-// ---- Data loading ----
+// ============================================================
+// Tab navigation (with animated underline + crossfade)
+// ============================================================
+document.querySelectorAll("nav.tabs button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("nav.tabs button").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    positionTabUnderline();
+    switchView(btn.dataset.view);
+  });
+});
+
+function positionTabUnderline() {
+  const active = document.querySelector("nav.tabs button.active");
+  const underline = document.getElementById("tab-underline");
+  if (!active || !underline) return;
+  underline.style.left = active.offsetLeft + "px";
+  underline.style.width = active.offsetWidth + "px";
+}
+window.addEventListener("resize", positionTabUnderline);
+
+function switchView(name) {
+  const target = document.getElementById("view-" + name);
+  document.querySelectorAll(".view").forEach((v) => {
+    if (v !== target) v.classList.remove("active");
+  });
+  target.classList.add("active");
+  if (!reduceMotion && window.gsap) {
+    gsap.fromTo(target, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" });
+  }
+  if (name === "history") renderHistory();
+  if (name === "analytics") renderAnalytics();
+}
+
+// ============================================================
+// Data loading
+// ============================================================
 async function loadExercises() {
-  const { data, error } = await db.from("exercises").select("*").order("name");
+  const { data, error } = await db.from("exercises").select("*").eq("user_id", state.user.id).order("name");
   if (error) { console.error(error); return; }
-  state.exercises = data;
+  state.allExercisesRaw = data;
+  state.exercises = data.filter((e) => !e.archived);
   renderPlateGrid();
 }
 
@@ -54,6 +225,7 @@ async function loadTodaysWorkouts() {
   const { data, error } = await db
     .from("workouts")
     .select("*, exercises(name, color)")
+    .eq("user_id", state.user.id)
     .eq("session_date", TODAY);
   if (error) { console.error(error); return; }
   state.todaysWorkouts = data;
@@ -63,13 +235,17 @@ async function loadTodaysWorkouts() {
 async function loadAllWorkouts() {
   const { data, error } = await db
     .from("workouts")
-    .select("*, exercises(name, color)")
+    .select("*, exercises(name, color, archived)")
+    .eq("user_id", state.user.id)
     .order("session_date", { ascending: false });
   if (error) { console.error(error); return; }
   state.allWorkouts = data;
+  state.historyLoaded = true;
 }
 
-// ---- Rendering: Log view ----
+// ============================================================
+// Rendering: Log view
+// ============================================================
 function renderPlateGrid() {
   const grid = document.getElementById("plate-grid");
   grid.innerHTML = "";
@@ -86,6 +262,10 @@ function renderPlateGrid() {
   addEl.innerHTML = `<div class="plate-dot">+</div><div>Add exercise</div>`;
   addEl.addEventListener("click", addCustomExercise);
   grid.appendChild(addEl);
+
+  if (!reduceMotion && window.gsap) {
+    gsap.from(grid.children, { opacity: 0, y: 12, duration: 0.35, stagger: 0.03, ease: "power2.out" });
+  }
 }
 
 function selectExercise(id) {
@@ -98,9 +278,10 @@ function selectExercise(id) {
 async function addCustomExercise() {
   const name = prompt("Exercise name (e.g. Dips):");
   if (!name || !name.trim()) return;
-  const color = PLATE_COLORS[state.exercises.length % PLATE_COLORS.length];
-  const { data, error } = await db.from("exercises").insert({ name: name.trim(), color }).select().single();
+  const color = PLATE_COLORS[state.allExercisesRaw.length % PLATE_COLORS.length];
+  const { data, error } = await db.from("exercises").insert({ name: name.trim(), color, user_id: state.user.id }).select().single();
   if (error) { alert("Couldn't add exercise: " + error.message); return; }
+  state.allExercisesRaw.push(data);
   state.exercises.push(data);
   selectExercise(data.id);
 }
@@ -120,6 +301,9 @@ function renderSetEntry() {
       <button class="secondary" id="save-session-btn">Save to today's session</button>
     </div>
   `;
+  if (!reduceMotion && window.gsap) {
+    gsap.from(wrap.firstElementChild, { opacity: 0, y: 8, duration: 0.3, ease: "power2.out" });
+  }
   renderSetChips();
   document.getElementById("add-set-btn").addEventListener("click", () => {
     const input = document.getElementById("reps-input");
@@ -142,28 +326,51 @@ function renderSetChips() {
     .map((r, i) => `<span class="set-chip">Set ${i + 1}: ${r}</span>`)
     .join("");
   document.getElementById("save-session-btn").disabled = state.pendingSets.length === 0;
+  if (!reduceMotion && window.gsap && chips.lastElementChild) {
+    gsap.from(chips.lastElementChild, { scale: 0.5, opacity: 0, duration: 0.25, ease: "back.out(2)" });
+  }
 }
 
 async function saveSession() {
   if (!state.pendingSets.length) return;
-  const existing = state.todaysWorkouts.find((w) => w.exercise_id === state.selectedExerciseId);
+  const exerciseId = state.selectedExerciseId;
+
+  // Check for a PR against everything logged before today.
+  const { data: priorRows } = await db
+    .from("workouts")
+    .select("reps_per_set")
+    .eq("user_id", state.user.id)
+    .eq("exercise_id", exerciseId)
+    .lt("session_date", TODAY);
+  let prevMaxSet = 0;
+  (priorRows || []).forEach((r) => { prevMaxSet = Math.max(prevMaxSet, ...r.reps_per_set); });
+
+  const existing = state.todaysWorkouts.find((w) => w.exercise_id === exerciseId);
+  const mergedSets = existing ? [...existing.reps_per_set, ...state.pendingSets] : [...state.pendingSets];
+
   if (existing) {
-    const merged = [...existing.reps_per_set, ...state.pendingSets];
-    const { error } = await db.from("workouts").update({ reps_per_set: merged }).eq("id", existing.id);
+    const { error } = await db.from("workouts").update({ reps_per_set: mergedSets }).eq("id", existing.id);
     if (error) { alert("Save failed: " + error.message); return; }
   } else {
     const { error } = await db.from("workouts").insert({
       session_date: TODAY,
-      exercise_id: state.selectedExerciseId,
-      reps_per_set: state.pendingSets,
+      exercise_id: exerciseId,
+      reps_per_set: mergedSets,
+      user_id: state.user.id,
     });
     if (error) { alert("Save failed: " + error.message); return; }
   }
+
+  const newMaxSet = Math.max(...mergedSets);
+  const isPR = newMaxSet > prevMaxSet;
+
   state.pendingSets = [];
   state.selectedExerciseId = null;
   document.getElementById("set-entry-wrap").innerHTML = "";
   renderPlateGrid();
   await loadTodaysWorkouts();
+
+  if (isPR) celebratePR(exerciseId);
 }
 
 function renderSessionSummary() {
@@ -174,16 +381,169 @@ function renderSessionSummary() {
   }
   el.innerHTML = state.todaysWorkouts
     .map((w) => `
-      <div class="summary-row" style="--dot-color:${w.exercises.color}">
+      <div class="summary-row" style="--dot-color:${w.exercises.color}" data-exercise="${w.exercise_id}">
         <div class="summary-dot"></div>
         <div class="summary-name">${escapeHtml(w.exercises.name)}</div>
         <div class="summary-sets">${w.reps_per_set.join(" / ")}</div>
       </div>
     `)
     .join("");
+  if (!reduceMotion && window.gsap) {
+    gsap.from(el.children, { opacity: 0, x: -10, duration: 0.3, stagger: 0.04, ease: "power2.out" });
+  }
 }
 
-// ---- Rendering: History view ----
+// ---- PR celebration burst ----
+function celebratePR(exerciseId) {
+  const ex = state.exercises.find((e) => e.id === exerciseId);
+  const color = ex ? ex.color : "#e2492e";
+  const row = document.querySelector(`.summary-row[data-exercise="${exerciseId}"]`);
+  let x = window.innerWidth / 2, y = 140;
+  if (row) {
+    const rect = row.getBoundingClientRect();
+    x = rect.left + 12;
+    y = rect.top + rect.height / 2;
+    const badge = document.createElement("span");
+    badge.className = "pr-badge";
+    badge.textContent = "PR!";
+    row.appendChild(badge);
+  }
+  if (reduceMotion || !window.gsap) return;
+  for (let i = 0; i < 16; i++) {
+    const dot = document.createElement("div");
+    dot.className = "pr-burst";
+    dot.style.background = color;
+    dot.style.left = x + "px";
+    dot.style.top = y + "px";
+    document.body.appendChild(dot);
+    const angle = (Math.PI * 2 * i) / 16;
+    const dist = 60 + Math.random() * 40;
+    gsap.to(dot, {
+      x: Math.cos(angle) * dist,
+      y: Math.sin(angle) * dist,
+      opacity: 0,
+      scale: 0.3,
+      duration: 0.7 + Math.random() * 0.3,
+      ease: "power2.out",
+      onComplete: () => dot.remove(),
+    });
+  }
+}
+
+// ============================================================
+// Manage exercises modal
+// ============================================================
+document.getElementById("manage-exercises-btn").addEventListener("click", openManageModal);
+document.getElementById("manage-close-btn").addEventListener("click", closeManageModal);
+document.getElementById("manage-modal").addEventListener("click", (e) => {
+  if (e.target.id === "manage-modal") closeManageModal();
+});
+
+function openManageModal() {
+  renderManageList();
+  const modal = document.getElementById("manage-modal");
+  modal.hidden = false;
+  if (!reduceMotion && window.gsap) {
+    gsap.from(modal.querySelector(".modal-card"), { opacity: 0, y: 16, duration: 0.25, ease: "power2.out" });
+  }
+}
+function closeManageModal() {
+  document.getElementById("manage-modal").hidden = true;
+}
+
+function renderManageList() {
+  const list = document.getElementById("manage-list");
+  if (!state.allExercisesRaw.length) {
+    list.innerHTML = `<div class="empty-state">No exercises yet.</div>`;
+    return;
+  }
+  list.innerHTML = state.allExercisesRaw
+    .map((ex) => `
+      <div class="manage-row" data-id="${ex.id}">
+        <div class="manage-dot" style="--dot-color:${ex.color}" data-action="cycle-color"></div>
+        <input type="text" value="${escapeHtml(ex.name)}" data-action="rename" />
+        ${ex.archived ? '<span class="archived-tag">Archived</span>' : ""}
+        <div class="manage-actions">
+          <button class="icon-btn" data-action="archive" title="${ex.archived ? "Unarchive" : "Archive"}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+          </button>
+          <button class="icon-btn" data-action="delete" title="Delete permanently">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+          </button>
+        </div>
+      </div>
+    `)
+    .join("");
+
+  list.querySelectorAll('.manage-dot[data-action="cycle-color"]').forEach((dot) => {
+    dot.addEventListener("click", async () => {
+      const row = dot.closest(".manage-row");
+      const id = row.dataset.id;
+      const ex = state.allExercisesRaw.find((e) => e.id === id);
+      const next = PLATE_COLORS[(PLATE_COLORS.indexOf(ex.color) + 1) % PLATE_COLORS.length];
+      const { error } = await db.from("exercises").update({ color: next }).eq("id", id);
+      if (error) { alert("Couldn't update color: " + error.message); return; }
+      ex.color = next;
+      row.querySelector(".manage-dot").style.setProperty("--dot-color", next);
+      renderPlateGrid();
+    });
+  });
+
+  list.querySelectorAll('input[data-action="rename"]').forEach((input) => {
+    input.addEventListener("blur", async () => {
+      const row = input.closest(".manage-row");
+      const id = row.dataset.id;
+      const ex = state.allExercisesRaw.find((e) => e.id === id);
+      const newName = input.value.trim();
+      if (!newName || newName === ex.name) { input.value = ex.name; return; }
+      const { error } = await db.from("exercises").update({ name: newName }).eq("id", id);
+      if (error) { alert("Couldn't rename: " + error.message); input.value = ex.name; return; }
+      ex.name = newName;
+      renderPlateGrid();
+    });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
+  });
+
+  list.querySelectorAll('[data-action="archive"]').forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const row = btn.closest(".manage-row");
+      const id = row.dataset.id;
+      const ex = state.allExercisesRaw.find((e) => e.id === id);
+      const { error } = await db.from("exercises").update({ archived: !ex.archived }).eq("id", id);
+      if (error) { alert("Couldn't update: " + error.message); return; }
+      ex.archived = !ex.archived;
+      state.exercises = state.allExercisesRaw.filter((e) => !e.archived);
+      renderManageList();
+      renderPlateGrid();
+    });
+  });
+
+  list.querySelectorAll('[data-action="delete"]').forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const row = btn.closest(".manage-row");
+      const id = row.dataset.id;
+      const ex = state.allExercisesRaw.find((e) => e.id === id);
+      const { count } = await db.from("workouts").select("id", { count: "exact", head: true }).eq("exercise_id", id);
+      const n = count || 0;
+      const warning = n > 0
+        ? `Delete "${ex.name}"? This will permanently remove ${n} logged session${n > 1 ? "s" : ""} for this exercise, including any personal bests. This cannot be undone.`
+        : `Delete "${ex.name}"? This cannot be undone.`;
+      if (!confirm(warning)) return;
+      const { error } = await db.from("exercises").delete().eq("id", id);
+      if (error) { alert("Couldn't delete: " + error.message); return; }
+      state.allExercisesRaw = state.allExercisesRaw.filter((e) => e.id !== id);
+      state.exercises = state.allExercisesRaw.filter((e) => !e.archived);
+      state.historyLoaded = false; // history/analytics data is now stale
+      renderManageList();
+      renderPlateGrid();
+      await loadTodaysWorkouts();
+    });
+  });
+}
+
+// ============================================================
+// Rendering: History view
+// ============================================================
 async function renderHistory() {
   await loadAllWorkouts();
   renderHeatmap();
@@ -192,7 +552,7 @@ async function renderHistory() {
 
 function renderHeatmap() {
   const el = document.getElementById("heatmap");
-  const days = 84; // ~12 weeks
+  const days = 84;
   const byDate = {};
   state.allWorkouts.forEach((w) => {
     byDate[w.session_date] = (byDate[w.session_date] || 0) + w.reps_per_set.length;
@@ -204,8 +564,7 @@ function renderHeatmap() {
     const d = new Date(today);
     d.setDate(d.getDate() - i);
     const key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-    const count = byDate[key] || 0;
-    cells.push({ key, count });
+    cells.push({ key, count: byDate[key] || 0 });
   }
   cells.forEach(({ key, count }) => {
     const cell = document.createElement("div");
@@ -217,6 +576,9 @@ function renderHeatmap() {
     }
     el.appendChild(cell);
   });
+  if (!reduceMotion && window.gsap) {
+    gsap.from(el.children, { opacity: 0, scale: 0.5, duration: 0.3, stagger: 0.004, ease: "power2.out" });
+  }
 }
 
 function renderHistoryList() {
@@ -255,13 +617,59 @@ function renderHistoryList() {
   });
 }
 
-// ---- Rendering: Analytics view ----
-let chartInstance = null;
+// ============================================================
+// Rendering: Analytics view
+// ============================================================
+let progressChart = null;
+let weeklyChart = null;
 
 async function renderAnalytics() {
-  if (!state.allWorkouts.length) await loadAllWorkouts();
+  if (!state.historyLoaded) await loadAllWorkouts();
+  renderStatStrip();
   renderPersonalBests();
+  renderWeeklyChart();
   renderExerciseSelect();
+  wireChartControls();
+}
+
+function countUp(el, target, suffix = "") {
+  if (reduceMotion || !window.gsap) { el.textContent = target + suffix; return; }
+  const obj = { val: 0 };
+  gsap.to(obj, {
+    val: target,
+    duration: 0.9,
+    ease: "power2.out",
+    onUpdate: () => { el.textContent = Math.round(obj.val) + suffix; },
+  });
+}
+
+function renderStatStrip() {
+  const el = document.getElementById("stat-strip");
+  const dates = new Set(state.allWorkouts.map((w) => w.session_date));
+  const totalSessions = dates.size;
+  const totalSets = state.allWorkouts.reduce((sum, w) => sum + w.reps_per_set.length, 0);
+  const totalReps = state.allWorkouts.reduce((sum, w) => sum + w.reps_per_set.reduce((a, b) => a + b, 0), 0);
+
+  // Current streak: consecutive days (ending today or yesterday) with at least one session.
+  let streak = 0;
+  let cursor = new Date();
+  const hasToday = dates.has(TODAY);
+  if (!hasToday) cursor.setDate(cursor.getDate() - 1);
+  while (true) {
+    const key = cursor.getFullYear() + "-" + String(cursor.getMonth() + 1).padStart(2, "0") + "-" + String(cursor.getDate()).padStart(2, "0");
+    if (dates.has(key)) { streak++; cursor.setDate(cursor.getDate() - 1); } else break;
+  }
+
+  el.innerHTML = `
+    <div class="stat-card"><div class="stat-value" id="stat-sessions">0</div><div class="stat-label">Sessions</div></div>
+    <div class="stat-card"><div class="stat-value" id="stat-sets">0</div><div class="stat-label">Sets logged</div></div>
+    <div class="stat-card"><div class="stat-value" id="stat-reps">0</div><div class="stat-label">Total reps</div></div>
+    <div class="stat-card"><div class="stat-value" id="stat-streak">0</div><div class="stat-label">Day streak</div></div>
+  `;
+  countUp(document.getElementById("stat-sessions"), totalSessions);
+  countUp(document.getElementById("stat-sets"), totalSets);
+  countUp(document.getElementById("stat-reps"), totalReps);
+  countUp(document.getElementById("stat-streak"), streak);
 }
 
 function renderPersonalBests() {
@@ -290,46 +698,144 @@ function renderPersonalBests() {
       </div>
     `)
     .join("");
+  if (!reduceMotion && window.gsap) {
+    gsap.from(el.children, { opacity: 0, y: 12, duration: 0.3, stagger: 0.05, ease: "power2.out" });
+  }
+}
+
+function isoWeekKey(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  const target = new Date(d.valueOf());
+  const dayNr = (d.getDay() + 6) % 7;
+  target.setDate(target.getDate() - dayNr + 3);
+  const firstThursday = new Date(target.getFullYear(), 0, 4);
+  const week = 1 + Math.round(((target - firstThursday) / 86400000 - 3 + ((firstThursday.getDay() + 6) % 7)) / 7);
+  return target.getFullYear() + "-W" + String(week).padStart(2, "0");
+}
+
+function renderWeeklyChart() {
+  const wrap = document.getElementById("weekly-chart-wrap");
+  if (!state.allWorkouts.length) {
+    wrap.innerHTML = `<div class="empty-state">No data yet.</div>`;
+    return;
+  }
+  wrap.innerHTML = `<canvas id="weekly-chart" height="200"></canvas>`;
+
+  // last 10 ISO weeks
+  const weekKeys = [];
+  const now = new Date();
+  for (let i = 9; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i * 7);
+    const key = isoWeekKey(d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"));
+    if (!weekKeys.includes(key)) weekKeys.push(key);
+  }
+
+  const exerciseIds = [...new Set(state.allWorkouts.map((w) => w.exercise_id))];
+  const datasets = exerciseIds.map((id) => {
+    const sample = state.allWorkouts.find((w) => w.exercise_id === id);
+    const perWeek = weekKeys.map((wk) =>
+      state.allWorkouts
+        .filter((w) => w.exercise_id === id && isoWeekKey(w.session_date) === wk)
+        .reduce((sum, w) => sum + w.reps_per_set.reduce((a, b) => a + b, 0), 0)
+    );
+    return {
+      label: sample.exercises.name,
+      data: perWeek,
+      backgroundColor: sample.exercises.color,
+      stack: "vol",
+    };
+  });
+
+  if (weeklyChart) weeklyChart.destroy();
+  const ctx = document.getElementById("weekly-chart").getContext("2d");
+  weeklyChart = new Chart(ctx, {
+    type: "bar",
+    data: { labels: weekKeys, datasets },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: "bottom", labels: { color: "#8d92a0", boxWidth: 10 } } },
+      scales: {
+        x: { stacked: true, ticks: { color: "#8d92a0" }, grid: { display: false } },
+        y: { stacked: true, ticks: { color: "#8d92a0" }, grid: { color: "rgba(242,239,233,0.06)" }, beginAtZero: true },
+      },
+    },
+  });
 }
 
 function renderExerciseSelect() {
   const select = document.getElementById("exercise-select");
   const ids = [...new Set(state.allWorkouts.map((w) => w.exercise_id))];
-  const exercises = ids.map((id) => state.allWorkouts.find((w) => w.exercise_id === id).exercises).filter(Boolean);
-  const uniqueByName = [];
-  const seen = new Set();
-  ids.forEach((id) => {
-    const w = state.allWorkouts.find((w) => w.exercise_id === id);
-    if (!seen.has(id)) { seen.add(id); uniqueByName.push({ id, name: w.exercises.name, color: w.exercises.color }); }
-  });
-  if (!uniqueByName.length) {
+  if (!ids.length) {
     document.getElementById("chart-wrap").innerHTML = `<div class="empty-state">No data yet.</div>`;
     return;
   }
+  const seen = new Set();
+  const uniqueByName = [];
+  ids.forEach((id) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    const w = state.allWorkouts.find((w) => w.exercise_id === id);
+    uniqueByName.push({ id, name: w.exercises.name });
+  });
   select.innerHTML = uniqueByName.map((e) => `<option value="${e.id}">${escapeHtml(e.name)}</option>`).join("");
   select.onchange = () => renderChart(select.value);
   renderChart(uniqueByName[0].id);
 }
 
+function wireChartControls() {
+  document.querySelectorAll("#metric-toggle button").forEach((btn) => {
+    btn.onclick = () => {
+      document.querySelectorAll("#metric-toggle button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.chartMetric = btn.dataset.metric;
+      renderChart(document.getElementById("exercise-select").value);
+    };
+  });
+  document.querySelectorAll("#range-toggle button").forEach((btn) => {
+    btn.onclick = () => {
+      document.querySelectorAll("#range-toggle button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.chartRange = btn.dataset.range;
+      renderChart(document.getElementById("exercise-select").value);
+    };
+  });
+}
+
 function renderChart(exerciseId) {
   const wrap = document.getElementById("chart-wrap");
   wrap.innerHTML = `<canvas id="progress-chart" height="220"></canvas>`;
-  const rows = state.allWorkouts
+
+  let rows = state.allWorkouts
     .filter((w) => w.exercise_id === exerciseId)
     .sort((a, b) => a.session_date.localeCompare(b.session_date));
-  const labels = rows.map((r) => r.session_date);
-  const totals = rows.map((r) => r.reps_per_set.reduce((a, b) => a + b, 0));
-  const color = rows.length ? rows[0].exercises.color : "#3b7dd8";
 
-  if (chartInstance) chartInstance.destroy();
+  if (state.chartRange !== "all") {
+    const days = parseInt(state.chartRange, 10);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffKey = cutoff.getFullYear() + "-" + String(cutoff.getMonth() + 1).padStart(2, "0") + "-" + String(cutoff.getDate()).padStart(2, "0");
+    rows = rows.filter((r) => r.session_date >= cutoffKey);
+  }
+
+  const labels = rows.map((r) => r.session_date);
+  const values = rows.map((r) => {
+    if (state.chartMetric === "best") return Math.max(...r.reps_per_set);
+    if (state.chartMetric === "sets") return r.reps_per_set.length;
+    return r.reps_per_set.reduce((a, b) => a + b, 0);
+  });
+  const metricLabel = state.chartMetric === "best" ? "Best single set" : state.chartMetric === "sets" ? "Sets logged" : "Total reps";
+  const color = rows.length ? rows[0].exercises.color : "#3f86e0";
+
+  if (progressChart) progressChart.destroy();
   const ctx = document.getElementById("progress-chart").getContext("2d");
-  chartInstance = new Chart(ctx, {
+  progressChart = new Chart(ctx, {
     type: "line",
     data: {
       labels,
       datasets: [{
-        label: "Total reps",
-        data: totals,
+        label: metricLabel,
+        data: values,
         borderColor: color,
         backgroundColor: color + "33",
         fill: true,
@@ -341,28 +847,10 @@ function renderChart(exerciseId) {
       responsive: true,
       plugins: { legend: { display: false } },
       scales: {
-        x: { ticks: { color: "#8a8f98" }, grid: { color: "rgba(236,233,227,0.06)" } },
-        y: { ticks: { color: "#8a8f98" }, grid: { color: "rgba(236,233,227,0.06)" }, beginAtZero: true },
+        x: { ticks: { color: "#8d92a0" }, grid: { color: "rgba(242,239,233,0.06)" } },
+        y: { ticks: { color: "#8d92a0" }, grid: { color: "rgba(242,239,233,0.06)" }, beginAtZero: true },
       },
     },
   });
 }
 
-// ---- Utilities ----
-function escapeHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str;
-  return div.innerHTML;
-}
-
-// ---- Init ----
-async function init() {
-  if (!configured) {
-    document.getElementById("setup-banner").style.display = "block";
-    return;
-  }
-  await loadExercises();
-  await loadTodaysWorkouts();
-}
-
-init();
